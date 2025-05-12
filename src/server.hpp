@@ -15,7 +15,8 @@ private:
     void setup_routes();
     void sync_post(const std::string& queue, const std::string& value);
     void sync_get(const std::string& queue);
-
+    
+    static std::pair<std::string, int> parse_instance(const std::string& instance);
     int port_;
     std::string self_host_;
     std::string instances_file_;

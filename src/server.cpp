@@ -5,14 +5,26 @@
 
 using json = nlohmann::json;
 
+std::pair<std::string, int> Server::parse_instance(const std::string& instance) {
+    size_t colon = instance.find(':');
+    std::string host = instance.substr(0, colon);
+    int port = std::stoi(instance.substr(colon + 1));
+    return {host, port};
+}
+
 Server::Server(int port, const std::string& instances_file)
     : port_(port), instances_file_(instances_file) {
     self_host_ = "127.0.0.1:" + std::to_string(port_);
     std::ifstream f(instances_file_);
     json j;
     f >> j;
-    instances_ = j["instances"].get<std::vector<std::string>>();
-
+    for (const auto& inst : j["instances"]) {
+        std::string instance_str = inst.get<std::string>();
+        if (instance_str != self_host_) {
+            instances_.push_back(instance_str);
+        }
+    }
+    
     std::cout << "[INFO] Loaded instances:\n";
     for (const auto& inst : instances_) {
         std::cout << "  - " << inst << std::endl;
@@ -28,14 +40,31 @@ void Server::run() {
 
 void Server::setup_routes() {
     svr_.Post(R"(/(\w+))", [this](const httplib::Request& req, httplib::Response& res) {
+        if (req.has_header("X-Origin") && req.get_header_value("X-Origin") == self_host_) {
+            res.status = 204;
+            return;
+        }
         std::lock_guard<std::mutex> lock(mutex_);
         std::string queue = req.matches[1];
         queues_[queue].push_back(req.body);
-        std::cout << "[POST] " << queue << " <= \"" << req.body << "\"" << std::endl;        sync_post(queue, req.body);
+        std::cout << "[POST] " << queue << " <= \"" << req.body << "\"" << std::endl;
+        std::cout << "[DEBUG] Current state of queues_:" << std::endl;
+        for (const auto& [key, values] : queues_) {
+            std::cout << "  Queue: " << key << ", Values: ";
+            for (const auto& value : values) {
+                std::cout << value << " ";
+            }
+            std::cout << std::endl;
+        }
+        sync_post(queue, req.body);
         res.status = 204;
     });
 
     svr_.Get(R"(/(\w+))", [this](const httplib::Request& req, httplib::Response& res) {
+        if (req.has_header("X-Origin") && req.get_header_value("X-Origin") == self_host_) {
+            res.status = 204;
+            return;
+        }
         std::lock_guard<std::mutex> lock(mutex_);
         std::string queue = req.matches[1];
         if (queues_[queue].empty()) {
@@ -45,7 +74,7 @@ void Server::setup_routes() {
         }
         std::string value = queues_[queue].front();
         queues_[queue].pop_front();
-        std::cout << "[GET] " << queue << " => "" << value << """ << std::endl;
+        std::cout << "[GET] " << queue << " => \"" << value << "\"" << std::endl;
         res.set_content(value, "text/plain");
         sync_get(queue);
     });
@@ -61,13 +90,11 @@ void Server::setup_routes() {
 
 void Server::sync_post(const std::string& queue, const std::string& value) {
     for (const auto& instance : instances_) {
-        if (instance == self_host_) continue;
         std::cout << "[SYNC_POST] Sending to " << instance << " /" << queue << std::endl;
-        size_t colon = instance.find(':');
-        std::string host = instance.substr(0, colon);
-        int port = std::stoi(instance.substr(colon + 1));
+        auto [host, port] = parse_instance(instance);
         httplib::Client cli(host, port);
-        auto res = cli.Post(("/" + queue).c_str(), value, "text/plain");
+        httplib::Headers headers = {{"X-Origin", self_host_}};
+        auto res = cli.Post(("/" + queue).c_str(), headers, value, "text/plain");
         if (!res) {
             std::cout << "[SYNC_POST] Failed to reach " << instance << std::endl;
         }
@@ -76,12 +103,10 @@ void Server::sync_post(const std::string& queue, const std::string& value) {
 
 void Server::sync_get(const std::string& queue) {
     for (const auto& instance : instances_) {
-        if (instance == self_host_) continue;
         std::cout << "[SYNC_GET] Informing " << instance << " about GET /" << queue << std::endl;
-        size_t colon = instance.find(':');
-        std::string host = instance.substr(0, colon);
-        int port = std::stoi(instance.substr(colon + 1));
+        auto [host, port] = parse_instance(instance);
         httplib::Client cli(host, port);
-        cli.Get(("/" + queue).c_str());
+        httplib::Headers headers = {{"X-Origin", self_host_}};
+        cli.Get(("/" + queue).c_str(), headers);
     }
 }
