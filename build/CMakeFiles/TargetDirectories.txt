@@ -1,0 +1,3 @@
+/Users/ashottovmasyan/Desktop/distributed_queue/build/CMakeFiles/distributed_queue.dir
+/Users/ashottovmasyan/Desktop/distributed_queue/build/CMakeFiles/edit_cache.dir
+/Users/ashottovmasyan/Desktop/distributed_queue/build/CMakeFiles/rebuild_cache.dir
